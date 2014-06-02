@@ -50,8 +50,12 @@ as xs:string {
   (: TODO: more logic here    :)
 };
 
+declare function local:stringify($s as xs:string) {
+  concat( '"', $s, '"' )
+};
+
 declare function local:to_json_kv_str($key as xs:string, $value as xs:string) {
-    concat('"', $key, '": "', $value, '"')
+    concat('"', $key, '": ', local:stringify($value))
 };
 
 declare function local:to_json_kv_int($key as xs:string, $value as xs:string) {
@@ -141,23 +145,20 @@ as xs:string {
   let $label as xs:string := local:title-from-mets($mets)
   (: TODO: Metadata :)
   let $metadata as xs:string := local:metadata-from-mets($mets)
-  return concat( 
-    "{",
-    string-join((
-      local:to_json_kv_str("@context", $CONTEXT),
-      local:to_json_kv_str("@id", $uri),
-      local:to_json_kv_str("@type", $type),
-      local:to_json_kv_str("@label", $label),
-      local:to_json_kv_arr("metadata", $metadata),
-      if ($type eq "sc:Manifest") then 
-        (: TODO: UNTESTED :)
-        let $div as element() := $mets//mets:div[@ID eq 'aggregates']
-        return local:manifest-from_div($div, $base-uri, $metadata, ())
-      else
-        local:process-as-collection($mets, $metadata, $base-uri, $uri)
-    ), ","),
-    "}"  
-  )    
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@context", $CONTEXT),
+    local:to_json_kv_str("@id", $uri),
+    local:to_json_kv_str("@type", $type),
+    local:to_json_kv_str("@label", $label),
+    local:to_json_kv_arr("metadata", $metadata),
+    if ($type eq "sc:Manifest") then 
+      (: TODO: UNTESTED :)
+      let $div as element() := $mets//mets:div[@ID eq 'aggregates']
+      return local:manifest-from_div($div, $base-uri, $metadata, ())
+    else
+      local:process-as-collection($mets, $metadata, $base-uri, $uri)
+    )
+  return local:objectify($props)
 };
 
 (:TODO:)
@@ -166,6 +167,10 @@ as xs:string {
   '[ { "TO":"DO" } ]'
 };
 
+(:~
+ : TODO: need to account for Physical structmaps that only have a root
+ : to bring up the correct viewer: fall back to RelatedObjects
+ :)
 declare function local:process-as-collection($mets as document-node(),
                                              $metadata as xs:string,
                                              $base-uri as xs:string,
@@ -173,6 +178,8 @@ declare function local:process-as-collection($mets as document-node(),
 as xs:string {
   let $file-sec as element() := $mets//mets:fileSec
   let $manifests as xs:string+ :=
+    (: TODO: Maybe rewrite this to use the physical if there is one, otherwise 
+      use the RelatedObjects :)
     for $phys-vol as element() in $mets//mets:div[@TYPE = $VOLUME_TYPES]
     return local:manifest-from_div($phys-vol, $base-uri, (), $coll-uri )
     (: TODO: METADATA :)
@@ -192,13 +199,15 @@ as xs:string+ {
   let $uri as xs:string := concat($base-uri, '/manifest.json')
   let $label as xs:string := string($phys-vol/@LABEL)
   let $sequences as xs:string* := local:sequences-from-div($phys-vol, $base-uri)
+  let $structs as xs:string* := local:structs-from-div($phys-vol, $base-uri)
   let $props as xs:string+ := (
     local:to_json_kv_str("@id", $uri),
     local:to_json_kv_str("@type", "sc:Manifest"),
     local:to_json_kv_str("@label", $label),
     if ($metadata) then local:to_json_kv_arr("metadata", $metadata) else (),
     if ($collection-uri) then local:to_json_kv_str("within", $collection-uri) else (),
-    if ($sequences) then local:to_json_kv_arr("sequences", $sequences) else ()
+    if ($sequences) then local:to_json_kv_arr("sequences", $sequences) else (),
+    if (count($structs) > 0) then local:to_json_kv_arr("structures", $structs) else ()
   )
   return local:objectify($props)
 };
@@ -311,6 +320,54 @@ as xs:string {
   return local:objectify($props)
 };
 
+declare function local:structs-from-div($phys-vol as element(), 
+                                        $base-uri as xs:string) 
+as xs:string {
+  let $mets := $phys-vol/ancestor::mets:mets
+  let $struct-maps as element()* := (
+    if ($phys-vol/@ID) then
+      let $smlink as element() := $mets//mets:smLink[@xlink:from eq $phys-vol/@ID]
+      return $mets//mets:div[@ID eq $smlink/@xlink:to]
+    else
+      $mets//mets:structMap[@TYPE eq 'Logical']/mets:div,
+    $phys-vol
+  )
+  let $ranges as xs:string* := 
+    for $struct-map as element() in $struct-maps
+    return local:struct-map-to-range($struct-map, $base-uri)
+  return local:arrayify($ranges)
+};
+
+
+declare function local:struct-map-to-range($struct-map as element(), 
+                                           $base-uri as xs:string) 
+as xs:string* {
+  let $ranges as xs:string* := 
+    for $div as element() at $i in $struct-map/descendant-or-self::mets:div[@LABEL]
+    let $id as xs:string := string(subsequence($div//mets:fptr, 1, 1)/@FILEID)
+    let $uri as xs:string := concat($base-uri, '/range/', $id, '.json') (: not sure this works - divs need IDs:)
+    let $label as xs:string := string($div/@LABEL)
+    let $canvases as xs:string* := 
+      for $canvas as element() in $div/mets:div[@TYPE = ("LogicalMember")]
+      let $canvas-id as xs:string := string($canvas/mets:fptr/@FILEID)
+      return local:stringify(concat($base-uri, '/canvas/', $canvas-id, '.json'))
+    let $ranges as xs:string* :=
+      for $range as element() in $div/mets:div[@LABEL]
+      let $range-id as xs:string := string(subsequence($range//mets:fptr, 1, 1)/@FILEID)
+      return local:stringify(concat($base-uri, '/range/', $range-id, '.json')) (: not sure this works - divs need IDs:)
+    let $props as xs:string+ := (
+      local:to_json_kv_str("@id", $uri),
+      local:to_json_kv_str("@type", "sc:Range"),
+      if ($i = 1) then local:to_json_kv_str("viewing_hint", "top") else (), 
+      local:to_json_kv_str("label", $label),
+      if (count($canvases) > 0) then local:to_json_kv_arr("canvases", local:arrayify($canvases)) else (),
+      if (count($ranges) > 0) then local:to_json_kv_arr("ranges", local:arrayify($ranges)) else ()
+    )
+    return local:objectify($props)
+  return $ranges
+};
+
+
 (:~ Main :)
 local:process-doc($doc-path)
 
@@ -319,3 +376,72 @@ local:process-doc($doc-path)
  : with the repurposing of XSLTs from the PUDL that, eg. turn high-level
  : MODS and VRA elements into strings.
  :)
+
+
+(:
+PUL mets:div @TYPEs:
+
+AggregatedObject
+Bifolio
+Binding
+BoundAlbum
+BoundArt
+BoundEntity
+BoundFragment
+BoundManuscript
+BoundVolume
+BoundWithVolume
+Colophon
+ContactSheet
+Contents
+CoverInside
+CoverOutside
+DisboundVolume
+Drawing
+FlipChart
+Foiio
+FoldedSheet
+Folio
+ForeEdge
+Fragment
+FragmentedLeaf
+FrontMatter
+FrontisPiece
+Gathering
+Insert
+IsPartOf
+Leaf
+LogicalMember
+LowerCover
+MountedMap
+MountedPhotograph
+MultiVolumeSet
+Object
+OrderedList
+Overture
+Page
+Panel
+PasteDown
+Pastedown
+Plate
+Polyptych
+RTLBoundManuscript
+RTLBoundVolume
+RTLObject
+Scroll
+ScrollSet
+Section
+Sheet
+Side
+Static
+TightBoundManuscript
+TightRTLBoundManuscript
+TitlePage
+UnboundGroup
+UpperCover
+Volume
+Work
+Works
+Wrapper
+leaf
+section:)
