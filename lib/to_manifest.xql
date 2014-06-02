@@ -84,7 +84,10 @@ declare function local:root($mets as document-node())
 as xs:string {
   let $type as xs:string := local:mf-type-from-mets($mets)
   let $base-uri as xs:string := concat($BASE, "/", string($mets/mets:mets/@OBJID))
-  let $uri as xs:string := concat($base-uri, '.json')
+  let $uri as xs:string := 
+    if ($type eq "sc:Manifest") then 
+      concat($base-uri, '/manifest.json')
+    else concat($base-uri, '/collection.json')
   let $label as xs:string := local:title-from-mets($mets)
   (: TODO: Metadata :)
   let $metadata as xs:string := local:metadata-from-mets($mets)
@@ -98,7 +101,7 @@ as xs:string {
       local:to_json_kv_arr("metadata", $metadata),
       if ($type eq "sc:Manifest") then 
         (: TODO: UNTESTED :)
-        let $div as element() := $mets//mets:structMap[@TYPE eq 'Physical']/mets:div
+        let $div as element() := $mets//mets:div[@ID eq 'aggregates']
         return local:manifest-from_div($div, $base-uri, $metadata, ())
       else
         local:process-as-collection($mets, $metadata, $base-uri, $uri)
@@ -135,7 +138,7 @@ declare function local:manifest-from_div($phys-vol as element(),
                                          $collection-uri as xs:string?)
 as xs:string+ {
   let $base-uri as xs:string := concat($base-uri, '/', string($phys-vol/@ID))
-  let $uri as xs:string := concat($base-uri, '.json')
+  let $uri as xs:string := concat($base-uri, '/manifest.json')
   let $type as xs:string := "sc:Manifest"
   let $label as xs:string := string($phys-vol/@LABEL)
   let $sequences as xs:string* := local:sequences-from-div($phys-vol, $base-uri)
@@ -166,23 +169,23 @@ as xs:string+ {
 declare function local:sequences-from-div($phys-vol as element(),
                                           $base-uri as xs:string)
 as xs:string {
-   let $uri as xs:string := concat($base-uri, '/page-sequence.json')
-   (: note that we don't modify the base uri here :)
-   let $type as xs:string := "sc:Sequence"
-   let $label as xs:string := "Page Sequence" (: ?? :)
-   let $viewing-hint as xs:string :=
-     (: TODO: more logic here: "individuals", "paged", "continuous" :)
-     if (string($phys-vol/@TYPE) = $PAGED_TYPES) then
-       "paged"
-     else "individuals"
-   let $dir as xs:string? := 
-     if ($viewing-hint eq "paged") then
-       if (starts-with(string($phys-vol/@TYPE), "RTL")) then
-         "right-to-left"
-       else "left-to-right"
-     else ()
-   let $canvases as xs:string := local:canvases-from-div($phys-vol, $base-uri)  
-     return concat( 
+  let $uri as xs:string := concat($base-uri, '/sequence/pages.json')
+  (: note that we don't modify the base uri here :)
+  let $type as xs:string := "sc:Sequence"
+  let $label as xs:string := "Page Sequence" (: ?? :)
+  let $viewing-hint as xs:string :=
+    (: TODO: more logic here: "individuals", "paged", "continuous" :)
+    if (string($phys-vol/@TYPE) = $PAGED_TYPES) then
+      "paged"
+    else "individuals"
+  let $dir as xs:string? := 
+    if ($viewing-hint eq "paged") then
+      if (starts-with(string($phys-vol/@TYPE), "RTL")) then
+        "right-to-left"
+      else "left-to-right"
+    else ()
+  let $canvases as xs:string := local:canvases-from-div($phys-vol, $base-uri)  
+  return concat( 
     "[{",
     string-join((
       local:to_json_kv_str("@id", $uri),
@@ -211,8 +214,8 @@ declare function local:canvas-from-div($div as element(),
                                        $base-uri as xs:string)
 as xs:string {
   let $label as xs:string := local:label-for-phys-div($div)
-  let $canvas-segment as xs:string := local:uri-segement-for-phys-div($div)
-  let $uri as xs:string := concat($base-uri, "/", $canvas-segment, ".json")
+  let $canvas-segment as xs:string := string($div/mets:fptr/@FILEID)
+  let $uri as xs:string := concat($base-uri, "/canvas/", $canvas-segment, ".json")
   let $type as xs:string := "sc:Canvas"
   
   return concat( "{",

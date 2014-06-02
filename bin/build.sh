@@ -7,7 +7,6 @@
 
 if [ "x$1" != "x" ]; then
   INPUT_METS=$(readlink -f $1)
-  echo "HERE"
 fi
 
 # Get the directory of the script 
