@@ -1,5 +1,6 @@
 xquery version "1.0";
 declare namespace mets = "http://www.loc.gov/METS/";
+declare namespace mix = "http://www.loc.gov/mix/v20";
 declare namespace mods = "http://www.loc.gov/mods/v3";
 declare namespace xlink = "http://www.w3.org/1999/xlink";
 
@@ -14,6 +15,13 @@ declare variable $CONTEXT as xs:string :=
   "http://iiif.io/api/presentation/2/context.json";
 declare variable $BASE as xs:string := 
   "http://library.princeton.edu/iiif";
+declare variable $IMAGE_SERVER as xs:string :=
+  "http://libimages.princeton.edu/loris";
+declare variable $IMAGE_CONTEXT as xs:string :=
+  "http://iiif.io/api/image/2/context.json";
+declare variable $IMAGE_PROFILE as xs:string :=
+  "http://iiif.io/api/image/2/profiles/level2.json";
+
   
 declare variable $COLL_TYPES as xs:string+ := (
  "MultiVolumeSet"
@@ -54,6 +62,18 @@ declare function local:to_json_kv_arr($key as xs:string, $value as xs:string) {
     concat('"', $key, '": ', $value)
 };
 
+declare function local:to_json_kv_obj($key as xs:string, $value as xs:string) {
+    concat('"', $key, '": ', $value)
+};
+
+declare function local:objectify($k-vs as xs:string*) {
+  concat( "{", string-join( $k-vs, ","), "}" )
+};
+
+declare function local:arrayify($objs as xs:string*) {
+  concat( "[", string-join( $objs, ","), "]" )
+};
+
 declare function local:mf-type-from-mets($mets as document-node()) 
 as xs:string {
   if (string($mets//mets:structMap[@TYPE eq "Physical"]/mets:div/@TYPE) = $COLL_TYPES) 
@@ -72,6 +92,36 @@ as xs:string {
   return lower-case(replace($label, "[^\p{L}\p{N}]", ""))
 };
 
+declare function local:file-for-image-div($div as element())
+as element() {
+  let $mets as element() := $div/ancestor::mets:mets
+  let $file-id as xs:string := string($div/mets:fptr/@FILEID)
+  return $mets//mets:file[@ID eq $file-id]
+};
+
+declare function local:tech-for-image-div($div as element())
+as element() {
+  let $mets as element() := $div/ancestor::mets:mets
+  let $admid as xs:string := string(local:file-for-image-div($div)/@ADMID)
+  return $mets//mets:techMD[@ID eq $admid]
+};
+
+declare function local:height-for-image-div($div as element())
+as xs:string {
+  string(local:tech-for-image-div($div)//mix:imageHeight)
+};
+
+declare function local:width-for-image-div($div as element())
+as xs:string {
+  string(local:tech-for-image-div($div)//mix:imageWidth)
+};
+
+declare function local:pudl-urn-to-base-uri($urn as xs:string) 
+as xs:string {
+  let $escaped as xs:string := replace($urn, "/", "%2F")
+  let $id as xs:string := replace($escaped, "urn:pudl:images:deliverable:", "")
+  return concat($IMAGE_SERVER, '/', $id)
+};
 
 (:~ Functions: Builders :)
 
@@ -126,7 +176,8 @@ as xs:string {
     for $phys-vol as element() in $mets//mets:div[@TYPE = $VOLUME_TYPES]
     return local:manifest-from_div($phys-vol, $base-uri, (), $coll-uri )
     (: TODO: METADATA :)
-  return concat('"manifests": [', string-join($manifests, ","), ']')
+  let $manifest_arr as xs:string := local:arrayify($manifests)
+  return local:to_json_kv_arr("manifests", $manifest_arr)
 };
 
 (:~
@@ -139,39 +190,29 @@ declare function local:manifest-from_div($phys-vol as element(),
 as xs:string+ {
   let $base-uri as xs:string := concat($base-uri, '/', string($phys-vol/@ID))
   let $uri as xs:string := concat($base-uri, '/manifest.json')
-  let $type as xs:string := "sc:Manifest"
   let $label as xs:string := string($phys-vol/@LABEL)
   let $sequences as xs:string* := local:sequences-from-div($phys-vol, $base-uri)
-  return concat( 
-    "{",
-    string-join((
-      local:to_json_kv_str("@id", $uri),
-      local:to_json_kv_str("@type", $type),
-      local:to_json_kv_str("@label", $label),
-      if ($metadata) then local:to_json_kv_arr("metadata", $metadata) else (),
-      if ($collection-uri) then local:to_json_kv_str("within", $collection-uri) else (),
-      if ($sequences) then local:to_json_kv_arr("sequences", $sequences) else ()
-    ), ","),
-    "}"
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@id", $uri),
+    local:to_json_kv_str("@type", "sc:Manifest"),
+    local:to_json_kv_str("@label", $label),
+    if ($metadata) then local:to_json_kv_arr("metadata", $metadata) else (),
+    if ($collection-uri) then local:to_json_kv_str("within", $collection-uri) else (),
+    if ($sequences) then local:to_json_kv_arr("sequences", $sequences) else ()
   )
+  return local:objectify($props)
 };
 
 (:~
  : Note that despite the function name, this always (for now anyway) returns
  : an array of one sc:Sequence. 
  : 
- : TODO: Should also account for the case where the volume has no children, in 
- : which case we should go to the fileSec (Lapidus, maybe others?). May need
- : the mets:structLink to make it so :-(
- :
  : TODO: Don't forget "non-paged" and "start" viewing hint on canvases
  :)
 declare function local:sequences-from-div($phys-vol as element(),
                                           $base-uri as xs:string)
 as xs:string {
   let $uri as xs:string := concat($base-uri, '/sequence/pages.json')
-  (: note that we don't modify the base uri here :)
-  let $type as xs:string := "sc:Sequence"
   let $label as xs:string := "Page Sequence" (: ?? :)
   let $viewing-hint as xs:string :=
     (: TODO: more logic here: "individuals", "paged", "continuous" :)
@@ -185,18 +226,15 @@ as xs:string {
       else "left-to-right"
     else ()
   let $canvases as xs:string := local:canvases-from-div($phys-vol, $base-uri)  
-  return concat( 
-    "[{",
-    string-join((
-      local:to_json_kv_str("@id", $uri),
-      local:to_json_kv_str("@type", $type),
-      local:to_json_kv_str("@label", $label),
-      if ($dir) then local:to_json_kv_str("viewing_direction", $dir) else (),
-      local:to_json_kv_str("viewing_hint", $viewing-hint),
-      if ($canvases) then local:to_json_kv_arr("canvases", $canvases) else ()
-    ), ","),
-    "}]"
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@id", $uri),
+    local:to_json_kv_str("@type", "sc:Sequence"),
+    local:to_json_kv_str("@label", $label),
+    if ($dir) then local:to_json_kv_str("viewing_direction", $dir) else (),
+    local:to_json_kv_str("viewing_hint", $viewing-hint),
+    if ($canvases) then local:to_json_kv_arr("canvases", $canvases) else ()
   )
+  return local:arrayify(local:objectify($props))
 };
 
 declare function local:canvases-from-div($phys-vol as element(), 
@@ -207,7 +245,7 @@ as xs:string {
       let $canvas := local:canvas-from-div($div, $base-uri) 
       order by $div/@ORDER cast as xs:integer
       return $canvas
-  return concat('[', string-join($canvases, ","), ']')
+  return local:arrayify($canvases)
 };
 
 declare function local:canvas-from-div($div as element(), 
@@ -216,21 +254,62 @@ as xs:string {
   let $label as xs:string := local:label-for-phys-div($div)
   let $canvas-segment as xs:string := string($div/mets:fptr/@FILEID)
   let $uri as xs:string := concat($base-uri, "/canvas/", $canvas-segment, ".json")
-  let $type as xs:string := "sc:Canvas"
-  
-  return concat( "{",
-    string-join((
-      local:to_json_kv_str("@id", $uri),
-      local:to_json_kv_str("@type", $type),
-      local:to_json_kv_str("label", $label)
-    ), ","),
-  "}"
+  let $images as xs:string := local:image-anno-from-div($div, $base-uri)
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@id", $uri),
+    local:to_json_kv_str("@type", "sc:Canvas"),
+    local:to_json_kv_str("label", $label),
+    local:to_json_kv_str("width", local:width-for-image-div($div)),
+    local:to_json_kv_str("height", local:height-for-image-div($div)),
+    local:to_json_kv_arr("images", $images)
   )
-  
-  
-
+  return local:objectify($props)
 };
 
+(:~ 
+ : Always returns a 1-member JSON Array
+ :)
+declare function local:image-anno-from-div($div as element(),
+                                           $base-uri as xs:string)
+as xs:string {
+  let $file as element() := local:file-for-image-div($div)
+  let $resource as xs:string := local:resource-from-file($file, $base-uri)
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@type", "oa:Annotation"),
+    local:to_json_kv_str("motivation", "sc:painting"),
+    local:to_json_kv_obj("resource", $resource)
+  )
+  return local:arrayify(local:objectify($props))
+};
+
+
+declare function local:resource-from-file($file as element(),
+                                          $base-uri as xs:string)
+as xs:string {
+  let $urn as xs:string := string($file/mets:FLocat/@xlink:href)
+  let $base-uri as xs:string := local:pudl-urn-to-base-uri($urn)
+  let $uri as xs:string := concat($base-uri, "/full/full/0/native.jpg")
+  let $type as xs:string := "dctypes:Image"
+  let $format as xs:string := "image/jpeg"
+  let $service as xs:string := local:service-from-image-base-uri($base-uri)
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@id", $uri),
+    local:to_json_kv_str("@type", $type),
+    local:to_json_kv_str("format", $format),
+    local:to_json_kv_obj("service", $service)
+  )
+  return local:objectify($props)
+};
+
+declare function local:service-from-image-base-uri($base-uri as xs:string)
+as xs:string {
+  let $props as xs:string+ := (
+    local:to_json_kv_str("@context", $IMAGE_CONTEXT),
+    local:to_json_kv_str("profile", $IMAGE_PROFILE),
+    local:to_json_kv_str("@id", $base-uri)
+  )
+  return local:objectify($props)
+};
 
 (:~ Main :)
 local:process-doc($doc-path)
