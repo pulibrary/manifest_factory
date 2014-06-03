@@ -344,17 +344,17 @@ declare function local:struct-map-to-range($struct-map as element(),
 as xs:string* {
   let $ranges as xs:string* := 
     for $div as element() at $i in $struct-map/descendant-or-self::mets:div[@LABEL]
-    let $id as xs:string := string(subsequence($div//mets:fptr, 1, 1)/@FILEID)
-    let $uri as xs:string := concat($base-uri, '/range/', $id, '.json') (: not sure this works - divs need IDs:)
+    let $range-id as xs:string := string($div/@ID)
+    let $uri as xs:string := concat($base-uri, '/range/', $range-id, '.json')
     let $label as xs:string := string($div/@LABEL)
     let $canvases as xs:string* := 
-      for $canvas as element() in $div/mets:div[@TYPE = ("LogicalMember")]
-      let $canvas-id as xs:string := string($canvas/mets:fptr/@FILEID)
+      for $canvas as element() in ($div/mets:div[@TYPE = ("LogicalMember")], $div/mets:fptr)
+      let $canvas-id as xs:string := (string($canvas/mets:fptr/@FILEID), $canvas/@FILEID)[1] (: check this w/ eg. photo albums)
       return local:stringify(concat($base-uri, '/canvas/', $canvas-id, '.json'))
     let $ranges as xs:string* :=
       for $range as element() in $div/mets:div[@LABEL]
-      let $range-id as xs:string := string(subsequence($range//mets:fptr, 1, 1)/@FILEID)
-      return local:stringify(concat($base-uri, '/range/', $range-id, '.json')) (: not sure this works - divs need IDs:)
+      let $range-id as xs:string := string($div/@ID)
+      return local:stringify(concat($base-uri, '/range/', $range-id, '.json'))
     let $props as xs:string+ := (
       local:to_json_kv_str("@id", $uri),
       local:to_json_kv_str("@type", "sc:Range"),
