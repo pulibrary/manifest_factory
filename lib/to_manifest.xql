@@ -349,7 +349,7 @@ as xs:string* {
     let $label as xs:string := string($div/@LABEL)
     let $canvases as xs:string* := 
       for $canvas as element() in ($div/mets:div[@TYPE = ("LogicalMember")], $div/mets:fptr)
-      let $canvas-id as xs:string := (string($canvas/mets:fptr/@FILEID), $canvas/@FILEID)[1] (: check this w/ eg. photo albums)
+      let $canvas-id as xs:string := (string($canvas/mets:fptr/@FILEID), $canvas/@FILEID)[1] (: check this w/ eg. photo albums:)
       return local:stringify(concat($base-uri, '/canvas/', $canvas-id, '.json'))
     let $ranges as xs:string* :=
       for $range as element() in $div/mets:div[@LABEL]
